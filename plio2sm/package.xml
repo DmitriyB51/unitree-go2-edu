@@ -1,0 +1,21 @@
+<?xml version="1.0"?>
+<package format="3">
+  <name>plio2sm</name>
+  <version>0.1.0</version>
+  <description>Convert Point-LIO output rosbag2 (poses + clouds) into a MOLA/MRPT .simplemap for loop closure post-processing.</description>
+  <maintainer email="dmitriyb51@example.com">dmitriyb51</maintainer>
+  <license>BSD</license>
+
+  <buildtool_depend>ament_cmake</buildtool_depend>
+
+  <depend>rclcpp</depend>
+  <depend>rosbag2_cpp</depend>
+  <depend>rosbag2_storage</depend>
+  <depend>nav_msgs</depend>
+  <depend>sensor_msgs</depend>
+  <depend>mrpt2</depend>
+
+  <export>
+    <build_type>ament_cmake</build_type>
+  </export>
+</package>

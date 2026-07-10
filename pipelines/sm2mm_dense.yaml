@@ -1,0 +1,37 @@
+# Dense sm2mm pipeline for pre-deskewed Point-LIO clouds (indoor Go2/L1).
+# No deskew (clouds already motion-compensated). Fine voxels, full L1 range.
+generators:
+  - class_name: mp2p_icp_filters::Generator
+    params:
+      target_layer: "raw"
+      process_sensor_labels_regex: "lidar"  # ignore the IMU observation
+      filterOutPointsAtZero: true
+
+filters:
+  - class_name: mp2p_icp_filters::FilterDecimateVoxels
+    params:
+      input_pointcloud_layer: "raw"
+      output_pointcloud_layer: "decimated"
+      voxel_filter_resolution: 0.05  # [m] finer -> denser indoor detail
+      decimate_method: DecimateMethod::FirstPoint
+
+  - class_name: mp2p_icp_filters::FilterByRange
+    params:
+      input_pointcloud_layer: "decimated"
+      output_layer_between: "ranged"   # keep points INSIDE [range_min,range_max]
+      range_min: 0.4    # drop robot legs/body
+      range_max: 40.0   # keep full L1 range
+      center: [robot_x, robot_y, robot_z]
+
+  # Clip Z outliers: keep only a floor..ceiling band (floor ~ -0.37 m).
+  # Removes points below the floor and high above (sparse grazing-ray noise).
+  - class_name: mp2p_icp_filters::FilterBoundingBox
+    params:
+      input_pointcloud_layer: "ranged"
+      inside_pointcloud_layer: "localmap"
+      bounding_box_min: [ "-1e6", "-1e6", "-1.0" ]
+      bounding_box_max: [  "1e6",  "1e6",  "2.0" ]
+
+  - class_name: mp2p_icp_filters::FilterDeleteLayer
+    params:
+      pointcloud_layer_to_remove: ["raw", "decimated", "ranged"]

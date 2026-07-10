@@ -1,0 +1,10 @@
+#!/usr/bin/env bash
+exec env -i \
+  HOME="$HOME" USER="$USER" TERM="$TERM" LANG="${LANG:-C.UTF-8}" \
+  PATH=/usr/local/bin:/usr/bin:/bin:/usr/local/sbin:/usr/sbin:/sbin \
+  DISPLAY="${DISPLAY}" XAUTHORITY="${XAUTHORITY:-$HOME/.Xauthority}" \
+  WAYLAND_DISPLAY="${WAYLAND_DISPLAY}" \
+  XDG_RUNTIME_DIR="${XDG_RUNTIME_DIR:-/run/user/$(id -u)}" \
+  XDG_SESSION_TYPE="${XDG_SESSION_TYPE}" \
+  DBUS_SESSION_BUS_ADDRESS="${DBUS_SESSION_BUS_ADDRESS}" \
+  bash --noprofile --rcfile "$HOME/.mola_bashrc" -i
