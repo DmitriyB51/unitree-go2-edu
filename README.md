@@ -113,11 +113,11 @@ clouds in body frame), `/utlidar/imu` (for georef).
 ~/mola
 cd ~/maps
 ~/ros2_mola_ws/install/plio2sm/lib/plio2sm/plio2sm \
-  ~/autonomy_stack_go2/plio_out ~/maps/final_map.simplemap  0.3  0.15  0
-#   args: <plio_out_bag> <out.simplemap> <kf_dist_m> <submap_radius_m> <detrend_z_window>
+  ~/autonomy_stack_go2/plio_out ~/maps/final_map.simplemap  0.3  0.15
+#   args: <plio_out_bag> <out.simplemap> <kf_dist_m> <submap_radius_m>
 #   kf_dist=0.3        distance between keyframes
 #   submap_radius=0.15 accumulate ±0.15 m around each keyframe (density)
-#   detrend=0          Z-detrend OFF (it distorts; Z-drift is fixed by the planar constraint in Step 3)
+#   (Z-drift is fixed later by the planar constraint in Step 3, not in the converter.)
 sm-cli info ~/maps/final_map.simplemap          # must list observations: lidar AND imu
 ```
 
@@ -156,7 +156,7 @@ env ASSUME_PLANAR_WORLD=true PLANAR_WORLD_SIGMA_Z=0.05 PLANAR_WORLD_SIGMA_ANG=0.
     -p ~/maps/lc_manual.yaml -i final_map.simplemap -o final_map_lc.simplemap
 ```
 - `ASSUME_PLANAR_WORLD=true` — flat-floor constraint (z≈0/roll≈0/pitch≈0), annealed; fixes Z-drift
-  INSIDE the optimization (unlike detrend → no distortion). Doesn't need loop closures.
+  INSIDE the optimization (no map distortion). Doesn't need loop closures.
 - `MOLA_DESKEW_IGNORE_NO_TIMESTAMPS=true` — REQUIRED: Point-LIO clouds are already deskewed, no
   per-point timestamps.
 - Manual loop(s) close the XY drift (automatic detection fails on the L1).
@@ -217,7 +217,8 @@ so heading at the revisit is irrelevant). Watch RAM (multi-GB simplemaps).
   pipelines crash.
 - sm2mm generator must process **`lidar` only** (`process_sensor_labels_regex`), or it trips on IMU.
 - `FilterByRange` → **`output_layer_between`** (keep inside range), NOT `output_layer_outside`.
-- **Do NOT Z-detrend** in the converter — it distorts. Z-drift is fixed by `ASSUME_PLANAR_WORLD`.
+- Z-drift is fixed by `ASSUME_PLANAR_WORLD` in loop closure, NOT in the converter (an early
+  detrend-in-converter attempt distorted the map and was removed).
 - Automatic loop closure does not work on the L1 (ICP fails on sparse scenes) → use planar (Z) +
   manual loops (XY).
 - Never `apt install ros-humble-mrpt-apps-gui` (MRPT 3.0) — conflicts with our MRPT 2.15.18 and
