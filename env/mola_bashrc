@@ -1,5 +1,5 @@
-# rcfile для чистого MOLA-окружения (без Isaac Sim / conda / ros2_ws)
+# for clean env
 source /opt/ros/humble/setup.bash
 source ~/ros2_mola_ws/install/setup.bash
 export PS1='\[\e[1;32m\](mola)\[\e[0m\] \w\$ '
-echo "MOLA env готов: $(which mola-lidar-odometry-cli 2>/dev/null || echo 'НЕ найден!')"
+echo "MOLA env ready: $(which mola-lidar-odometry-cli 2>/dev/null || echo 'not found')"

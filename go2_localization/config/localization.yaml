@@ -1,0 +1,42 @@
+map_matcher_node:
+  ros__parameters:
+    # Prebuilt loop-closed map (exported from MOLA pipeline).
+    map_path: /home/dmitriyb51/maps/final_map_lc.pcd
+
+    # Downsampling (values validated on the plio_out replay: sub-second GICP,
+    # fitness ~0.004, no accuracy loss vs finer scan_voxel).
+    map_voxel: 0.15      # voxel leaf for the prior map / GICP target [m]
+    scan_voxel: 0.20     # voxel leaf for the accumulated scan window (source) [m]
+
+    # Sliding window / match cadence.
+    window_sec: 1.0      # accumulate /registered_scan over this many seconds
+    match_every_m: 0.3   # only re-match after this much travel [m]
+    crop_radius: 30.0    # reserved (per-match crop disabled; target set once for this small map)
+
+    # Registration. gicp (default) | ndt
+    # GICP chosen: on this data NDT was both slower and far worse (fitness 0.11-0.36
+    # vs 0.004). Cost is GICP's iterative optimization -> keep iterations modest.
+    registration: gicp
+    gicp_max_corr_dist: 0.8
+    gicp_max_iter: 15
+    gicp_transform_eps: 0.0001
+    ndt_resolution: 1.0
+
+    # Health gate: accept a match only if fitness < this (tune on real data).
+    fitness_thresh: 0.3
+    # Reject a match that would jump the correction more than this [m] in one step
+    # (catches GICP sliding through a wall). First lock and /initialpose are exempt.
+    max_correction_jump: 1.0
+
+    # Frames (match Point-LIO's naming; do not change unless the engine changes).
+    map_frame: map
+    world_frame: camera_init
+    base_frame: aft_mapped
+
+    # Topics from Point-LIO (mapping_utlidar.launch remaps).
+    scan_topic: /registered_scan
+    odom_topic: /state_estimation
+
+    # Initial correction map->camera_init as [x, y, z, roll, pitch, yaw].
+    # Default identity: robot starts at the map origin (first keyframe).
+    initial_pose: [0.0, 0.0, 0.0, 0.0, 0.0, 0.0]
