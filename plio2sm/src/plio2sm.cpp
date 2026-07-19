@@ -1,15 +1,4 @@
-/* plio2sm: convert a Point-LIO output rosbag2 into a MOLA/MRPT .simplemap.
- *
- * Inputs (topics in the bag):
- *   - odometry  (nav_msgs/Odometry)      : per-scan poses  T_world_from_body
- *   - cloud     (sensor_msgs/PointCloud2): scan in body frame (already deskewed)
- *
- * Output: a .simplemap where each keyframe = (pose PDF, CObservationPointCloud).
- * The cloud is stored in the sensor (body) frame with sensorPose=Identity, so
- * keyframe placement = odometry pose. This is exactly the structure MOLA-LO
- * builds internally; only the pose source differs (Point-LIO instead of ICP).
- */
-
+# map convertation point LIO to simple map
 #include <rosbag2_cpp/converter_options.hpp>
 #include <rosbag2_cpp/readers/sequential_reader.hpp>
 #include <rosbag2_storage/storage_options.hpp>
@@ -194,12 +183,9 @@ int main(int argc, char** argv)
     pathLen[i] = pathLen[i - 1] + std::sqrt(dx * dx + dy * dy + dz * dz);
   }
 
-  // Z-drift removal (option B): the robot walked one FLAT level, so its true Z is
-  // ~constant; Point-LIO's slow upward Z creep is pure drift. Subtract a smooth
-  // path-window moving-average of Z (the drift trend) from every pose, keeping the
-  // real high-frequency body bob and all XY + rotation from Point-LIO. Referenced
-  // to the start so the map keeps its initial (correct) height. Only the world Z
-  // of each pose is shifted (left-compose with a pure Z translation).
+
+
+
   if (detrendZWin > 0.0 && clouds.size() > 2)
   {
     std::vector<double> movavgZ(clouds.size(), 0.0);
@@ -228,10 +214,8 @@ int main(int argc, char** argv)
         zRef - *std::max_element(movavgZ.begin(), movavgZ.end()));
   }
 
-  // Anchors every kfDist of path length; each keyframe accumulates ALL scans
-  // within +/- submapRadius of path length around the anchor (a local submap
-  // from the SAME pass -> consistent poses). Dense, well-structured, overlapping
-  // clouds -> far more robust loop-closure ICP than thin single-scan keyframes.
+
+  
   mrpt::maps::CSimpleMap sm;
   size_t kf = 0;
 
