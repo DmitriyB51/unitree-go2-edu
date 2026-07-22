@@ -1,0 +1,203 @@
+# nav2_params.yaml — конфигурация Nav2 для Go2 (этапы 3–4 плана навигации).
+#
+# КАК ЧИТАТЬ ЭТОТ ФАЙЛ:
+#   Nav2 — это набор отдельных узлов (planner, controller, costmaps, ...).
+#   Каждый верхнеуровневый блок ниже (`имя_узла:`) — параметры одного узла.
+#   Внутри `ros__parameters:` — сами настройки.
+#
+# ЧТО У НАС НЕСТАНДАРТНОГО (помечено ►► по тексту):
+#   1. НЕТ amcl. Локализацию даёт наш map_matcher_node: он публикует map→camera_init.
+#      Поэтому Nav2 не оценивает позу сам — только пользуется нашей.
+#   2. Кадр одометрии называется НЕ "odom", а "camera_init" (так его зовёт Point-LIO).
+#   3. Робот четвероногий: footprint 0.7×0.3 м, умеет крутиться на месте.
+#   4. Препятствия для local costmap берём из /registered_scan (лидар), сплющенного
+#      в 2D LaserScan отдельным узлом pointcloud_to_laserscan (см. launch).
+
+# ============================================================================
+# BT NAVIGATOR — "дирижёр": принимает цель, запускает дерево поведения
+# (спланируй путь → веди по нему → если застрял, вызови recovery).
+# ============================================================================
+bt_navigator:
+  ros__parameters:
+    global_frame: map
+    robot_base_frame: base_link      # ►► центр робота на полу (static TF от aft_mapped)
+    odom_topic: /state_estimation    # ►► одометрия Point-LIO (nav_msgs/Odometry)
+    bt_loop_duration: 10
+    default_server_timeout: 20
+    # Дерево поведения по умолчанию из nav2 (навигация к одной позе).
+    # Своё писать не нужно — стандартного хватает.
+
+# ============================================================================
+# PLANNER SERVER — "GPS": строит ГЛОБАЛЬНЫЙ путь по карте здания.
+# Плагин NavFn: волновой алгоритм (Дейкстра/A*) по сетке global_costmap.
+# Простой и предсказуемый — идеален для первого раза.
+# ============================================================================
+planner_server:
+  ros__parameters:
+    expected_planner_frequency: 1.0
+    planner_plugins: ["GridBased"]
+    GridBased:
+      plugin: "nav2_navfn_planner/NavfnPlanner"
+      tolerance: 0.5          # если точно в цель нельзя — принять точку в 0.5 м от неё
+      use_astar: true         # A* быстрее чистого Дейкстры
+      allow_unknown: false    # ►► НЕ планировать через "неизвестно" (серое) — только по
+                              #    изведанным коридорам. Иначе робот попробует сквозь дыру в стене.
+
+# ============================================================================
+# CONTROLLER SERVER — "руль": ведёт робота вдоль глобального пути,
+# объезжая то, что видит лидар прямо сейчас (local_costmap).
+# Плагин RPP (Regulated Pure Pursuit): простой и надёжный — "целься в точку
+# на пути впереди и езжай туда", со сбросом скорости на поворотах/у препятствий.
+# ============================================================================
+controller_server:
+  ros__parameters:
+    controller_frequency: 20.0
+    # Пороги "цель достигнута".
+    general_goal_checker:
+      plugin: "nav2_controller::SimpleGoalChecker"
+      xy_goal_tolerance: 0.25       # доехали, если в 25 см от цели
+      yaw_goal_tolerance: 0.26      # и развернулись в пределах ~15°
+    goal_checker_plugins: ["general_goal_checker"]
+    controller_plugins: ["FollowPath"]
+    FollowPath:
+      plugin: "nav2_regulated_pure_pursuit_controller::RegulatedPurePursuitController"
+      desired_linear_vel: 0.5       # ►► крейсерская скорость 0.5 м/с (безопасно для начала)
+      lookahead_dist: 0.6           # на сколько метров вперёд по пути "целиться"
+      min_lookahead_dist: 0.3
+      max_lookahead_dist: 0.9
+      # ►► Разрешаем разворот на месте перед стартом — четвероногий это умеет,
+      #    и так он не выписывает широкую дугу в узком коридоре.
+      use_rotate_to_heading: true
+      rotate_to_heading_angular_vel: 0.8
+      max_angular_accel: 3.0
+      # Сброс скорости у препятствий и на поворотах (то самое "regulated").
+      use_regulated_linear_velocity_scaling: true
+      use_cost_regulated_linear_velocity_scaling: false
+      allow_reversing: false        # Go2 умеет назад, но для начала проще без реверса
+
+# ============================================================================
+# GLOBAL COSTMAP — большая статичная карта здания (наш 2D-срез) + "раздувание"
+# стен на радиус робота. По ней планирует GPS.
+# ============================================================================
+global_costmap:
+  global_costmap:
+    ros__parameters:
+      update_frequency: 1.0
+      publish_frequency: 1.0
+      global_frame: map
+      robot_base_frame: base_link
+      # ►► Footprint четвероногого = габарит корпуса Go2 ≈ 0.7 м (длина, по X) × 0.3 м (ширина, по Y).
+      #    Задаём как 4 угла прямоугольника [x,y] в метрах, центр — в base_link:
+      #    полудлина 0.35 по X, полуширина 0.15 по Y.
+      footprint: "[ [0.35, 0.15], [0.35, -0.15], [-0.35, -0.15], [-0.35, 0.15] ]"
+      resolution: 0.05
+      track_unknown_space: true     # ►► помнить, где "неизвестно" (чтобы allow_unknown:false работал)
+      plugins: ["static_layer", "inflation_layer"]
+      # static_layer — наша карта здания из map_server.
+      static_layer:
+        plugin: "nav2_costmap_2d::StaticLayer"
+        map_subscribe_transient_local: true
+      # inflation_layer — раздувает стены, создавая "буфер безопасности" вокруг них,
+      # чтобы планировщик не вёл робота впритирку.
+      inflation_layer:
+        plugin: "nav2_costmap_2d::InflationLayer"
+        # 0.70 ≈ полуширина типового коридора (замер по карте: 75%-перцентиль 0.85 м) —
+        # градиенты от двух стен встречаются в центре, и путь идёт по середине.
+        # Выше 0.85 не ставим: узкие дверные проёмы станут "дорогими" и робот их обойдёт.
+        inflation_radius: 0.80        # почти полуширина коридора (замер: 75%=0.85 м) — сильнее к центру
+        cost_scaling_factor: 2.0      # ниже = площе градиент = сильнее притяг к центру (макс. обход стен)
+
+# ============================================================================
+# LOCAL COSTMAP — маленькое окно вокруг робота, обновляется живым лидаром.
+# Ловит то, чего НЕТ на статичной карте: люди, коробки, сдвинутая мебель.
+# ============================================================================
+local_costmap:
+  local_costmap:
+    ros__parameters:
+      update_frequency: 5.0
+      publish_frequency: 5.0
+      global_frame: camera_init       # ►► локальная карта живёт в кадре одометрии (гладкий, без скачков)
+      robot_base_frame: base_link
+      rolling_window: true            # окно едет вместе с роботом
+      width: 6                        # 6×6 м окна вокруг робота
+      height: 6
+      resolution: 0.05
+      footprint: "[ [0.35, 0.15], [0.35, -0.15], [-0.35, -0.15], [-0.35, 0.15] ]"
+      plugins: ["obstacle_layer", "inflation_layer"]
+      # obstacle_layer — препятствия из живого лидара.
+      # ►► Берём 3D-облако /registered_scan НАПРЯМУЮ (data_type PointCloud2) — так не нужен
+      #    отдельный пакет pointcloud_to_laserscan. Облако уже в кадре camera_init.
+      #    Фильтр по высоте (min/max_obstacle_height) отсекает пол и потолок: оставляем
+      #    только то, что на уровне корпуса робота. Высота здесь — z в кадре camera_init
+      #    (пол ≈ -0.35 м), поэтому берём от -0.1 (чуть выше пола) до 1.5 м.
+      #    Если на Jetson это окажется тяжело — поставить ros-humble-pointcloud-to-laserscan
+      #    и сплющить облако в лёгкий 2D /scan (LaserScan). Тогда вернуть предыдущий вариант.
+      obstacle_layer:
+        plugin: "nav2_costmap_2d::ObstacleLayer"
+        observation_sources: pointcloud
+        pointcloud:
+          topic: /registered_scan
+          data_type: "PointCloud2"
+          marking: true               # ставить препятствия
+          clearing: true              # и убирать, когда путь освободился
+          min_obstacle_height: -0.1   # чуть выше пола (пол ≈ -0.35 м в camera_init)
+          max_obstacle_height: 1.5    # ниже потолка
+          obstacle_max_range: 5.0
+          raytrace_max_range: 6.0
+      inflation_layer:
+        plugin: "nav2_costmap_2d::InflationLayer"
+        inflation_radius: 0.80        # держим заодно с global_costmap (см. пояснение там)
+        cost_scaling_factor: 2.0
+
+# ============================================================================
+# MAP SERVER — грузит наш 2D-срез (building.yaml) и раздаёт его как /map.
+# ►► yaml_filename задаётся в launch-файле (абсолютным путём), чтобы не хардкодить.
+# ============================================================================
+map_server:
+  ros__parameters:
+    yaml_filename: ""     # заполняется из launch
+
+# ============================================================================
+# BEHAVIOR SERVER — recovery-поведения: что делать, когда застряли.
+# spin (крутнуться на месте, "оглядеться"), backup (сдать назад), wait (подождать).
+# ============================================================================
+behavior_server:
+  ros__parameters:
+    local_costmap_topic: local_costmap/costmap_raw
+    global_costmap_topic: global_costmap/costmap_raw
+    local_frame: camera_init
+    global_frame: map
+    robot_base_frame: base_link
+    behavior_plugins: ["spin", "backup", "wait"]
+    spin:
+      plugin: "nav2_behaviors/Spin"
+    backup:
+      plugin: "nav2_behaviors/BackUp"
+    wait:
+      plugin: "nav2_behaviors/Wait"
+
+# ============================================================================
+# VELOCITY SMOOTHER — сглаживает /cmd_vel, чтобы робот не дёргался рывками.
+# Итоговые команды идут в наш мост cmd_vel→лапы (vel_ctrl_repub).
+# ============================================================================
+velocity_smoother:
+  ros__parameters:
+    max_velocity: [0.5, 0.0, 0.8]     # [vx, vy, vyaw]. vy=0: боком пока не ходим (упростили)
+    min_velocity: [-0.5, 0.0, -0.8]
+    max_accel: [1.0, 0.0, 2.0]
+    max_decel: [-1.5, 0.0, -2.0]
+
+# ============================================================================
+# LIFECYCLE MANAGER — включает все узлы Nav2 по порядку (configure→activate).
+# Если "ничего не работает" — первым делом смотри, все ли узлы стали active.
+# ============================================================================
+lifecycle_manager_navigation:
+  ros__parameters:
+    autostart: true
+    node_names:
+      - map_server
+      - planner_server
+      - controller_server
+      - behavior_server
+      - velocity_smoother
+      - bt_navigator

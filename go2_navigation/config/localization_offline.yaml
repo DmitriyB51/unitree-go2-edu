@@ -1,0 +1,73 @@
+map_matcher_node:
+  ros__parameters:
+    # Prebuilt loop-closed map (exported from MOLA pipeline).
+    map_path: /home/dmitriyb51/maps/final_map_lc.pcd
+
+    # Downsampling (values validated on the plio_out replay: sub-second GICP,
+    # fitness ~0.004, no accuracy loss vs finer scan_voxel).
+    map_voxel: 0.15      # voxel leaf for the prior map / GICP target [m]
+    scan_voxel: 0.20     # voxel leaf for the accumulated scan window (source) [m]
+
+    # Sliding window / match cadence.
+    window_sec: 1.0      # accumulate /registered_scan over this many seconds
+    match_every_m: 0.3   # re-match after this much travel [m] ...
+    match_min_interval_s: 1.0  # ... OR at least this often [s], so an in-place turn keeps matching
+    crop_radius: 30.0    # reserved (per-match crop disabled; target set once for this small map)
+
+    # Registration. gicp (default) | ndt
+    # GICP chosen: on this data NDT was both slower and far worse (fitness 0.11-0.36
+    # vs 0.004). Cost is GICP's iterative optimization -> keep iterations modest.
+    registration: gicp
+    gicp_max_corr_dist: 0.8
+    gicp_max_iter: 15
+    gicp_transform_eps: 0.0001
+    ndt_resolution: 1.0
+
+    # Health gate: accept a match only if fitness < this (tune on real data).
+    fitness_thresh: 0.3
+    # Reject a match that would jump the correction more than this [m] in one step
+    # (catches GICP sliding through a wall). First lock and /initialpose are exempt.
+    max_correction_jump: 1.0
+    # ...but accept a bigger jump if fitness is below this (a confident re-lock at a turn, not a
+    # wrong slide). Prevents holding a drifting pose = walking through walls.
+    strong_fitness: 0.03
+
+    # Z-constraint during tracking: on ACCEPTED matches, softly ease the robot's map-frame
+    # Z toward a floor reference, cancelling Point-LIO's Z-drift so it never builds into an
+    # unrecoverable gap. Reference is auto-captured from the first lock (floor_z sentinel 1e9),
+    # or set floor_z to a known height to override. Only touches already-gated matches, so it
+    # never distorts an unsure pose.
+    z_constraint_enable: true
+    z_pin_gain: 0.5          # fraction of the Z error corrected per match (soft easing)
+    floor_z: 1.0e9           # sentinel = auto-capture reference from first lock
+    # Planar Z hold (live assume_planar_world): HARD-pin robot map-Z to the floor reference
+    # every 50 Hz publish, independent of match success -> pose never dives during a lock loss
+    # and the GICP guess stays at floor so re-lock is near-instant post-turn. Assumes a flat
+    # floor (true for this building). Set false to disable and fall back to the soft z_pin only.
+    planar_z_hold: true
+
+    # Recovery mode: after N consecutive rejects (lock lost at a turn), re-project the guess Z
+    # to the floor reference (closes the big Z gap local GICP can't) + a small local Z-sweep,
+    # and accept a good-fitness re-lock bypassing the jump gate.
+    recovery_enable: true
+    recovery_after_n: 5
+    recovery_z_range: 3.0    # +/- sweep around the re-projected guess [m]
+    recovery_z_step: 0.5     # sweep step [m]
+
+    # Frames (match Point-LIO's naming; do not change unless the engine changes).
+    map_frame: map
+    world_frame: camera_init
+    base_frame: aft_mapped
+
+    # Topics from Point-LIO (mapping_utlidar.launch remaps).
+    scan_topic: /registered_scan
+    odom_topic: /state_estimation
+
+    # The L1/aft_mapped body frame is mounted ~117 deg off the robot's physical 'forward'
+    # (see transform_everything.py). Rotate the published pose orientation so the RViz arrow
+    # points along travel. Display-only; calibrate precisely on the real dog (straight drive) for Nav2.
+    heading_offset_deg: -117.0
+
+    # Initial correction map->camera_init as [x, y, z, roll, pitch, yaw].
+    # Default identity: robot starts at the map origin (first keyframe).
+    initial_pose: [0.0, 0.0, 0.0, 0.0, 0.0, 0.0]

@@ -1,0 +1,16 @@
+<!--
+  CycloneDDS для НОУТБУКА, домен 1 (WiFi).
+
+  ЗАЧЕМ: CycloneDDS объявляет себя только на ПЕРВОМ интерфейсе из списка.
+  Если не привязать его явно к WiFi, ноутбук может уйти на Ethernet/docker0
+  и не увидеть собаку. Поэтому здесь ровно один интерфейс — wlo1.
+
+  Если имя WiFi-интерфейса другое, посмотри: ip -brief addr
+-->
+<CycloneDDS>
+  <Domain>
+    <General><Interfaces>
+      <NetworkInterface name="wlo1" priority="default" multicast="default"/>
+    </Interfaces></General>
+  </Domain>
+</CycloneDDS>

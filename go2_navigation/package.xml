@@ -1,0 +1,45 @@
+<?xml version="1.0"?>
+<package format="3">
+  <name>go2_navigation</name>
+  <version>0.1.0</version>
+  <description>Nav2 navigation for the Go2: 2D map generation from the loop-closed 3D map (ray-casting), TF wiring (map-&gt;camera_init-&gt;aft_mapped-&gt;base_link) and Nav2 bringup on the prior map. Localization comes from go2_localization (no AMCL).</description>
+  <maintainer email="dmitriyb51@example.com">dmitriyb51</maintainer>
+  <license>BSD</license>
+
+  <buildtool_depend>ament_cmake</buildtool_depend>
+
+  <!-- Пакет не собирает C++ узлов: он ставит launch/config/карты и python-скрипты.
+       Всё ниже — зависимости ВРЕМЕНИ ЗАПУСКА. -->
+
+  <!-- Статические TF (aft_mapped -> base_link) и работа с деревом кадров. -->
+  <exec_depend>tf2_ros</exec_depend>
+  <exec_depend>tf2_tools</exec_depend>
+
+  <!-- Собственно Nav2: сервер карты, планировщик, контроллер, поведения, lifecycle. -->
+  <exec_depend>nav2_map_server</exec_depend>
+  <exec_depend>nav2_planner</exec_depend>
+  <exec_depend>nav2_controller</exec_depend>
+  <exec_depend>nav2_behaviors</exec_depend>
+  <exec_depend>nav2_bt_navigator</exec_depend>
+  <exec_depend>nav2_lifecycle_manager</exec_depend>
+  <exec_depend>nav2_velocity_smoother</exec_depend>
+  <exec_depend>nav2_costmap_2d</exec_depend>
+  <exec_depend>nav2_navfn_planner</exec_depend>
+  <exec_depend>nav2_regulated_pure_pursuit_controller</exec_depend>
+
+  <!-- Наша локализация даёт map->camera_init (вместо AMCL). -->
+  <exec_depend>go2_localization</exec_depend>
+
+  <!-- Просмотр и запуск. -->
+  <exec_depend>rviz2</exec_depend>
+  <exec_depend>launch</exec_depend>
+  <exec_depend>launch_ros</exec_depend>
+
+  <!-- Для скриптов генерации карты (bag_to_grid.py читает rosbag2). -->
+  <exec_depend>rosbag2_py</exec_depend>
+  <exec_depend>sensor_msgs_py</exec_depend>
+
+  <export>
+    <build_type>ament_cmake</build_type>
+  </export>
+</package>

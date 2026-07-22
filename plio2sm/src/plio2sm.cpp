@@ -1,4 +1,15 @@
-# map convertation point LIO to simple map
+/* plio2sm: convert a Point-LIO output rosbag2 into a MOLA/MRPT .simplemap.
+ *
+ * Inputs (topics in the bag):
+ *   - odometry  (nav_msgs/Odometry)      : per-scan poses  T_world_from_body
+ *   - cloud     (sensor_msgs/PointCloud2): scan in body frame (already deskewed)
+ *
+ * Output: a .simplemap where each keyframe = (pose PDF, CObservationPointCloud).
+ * The cloud is stored in the sensor (body) frame with sensorPose=Identity, so
+ * keyframe placement = odometry pose. This is exactly the structure MOLA-LO
+ * builds internally; only the pose source differs (Point-LIO instead of ICP).
+ */
+
 #include <rosbag2_cpp/converter_options.hpp>
 #include <rosbag2_cpp/readers/sequential_reader.hpp>
 #include <rosbag2_storage/storage_options.hpp>
@@ -40,11 +51,8 @@ int main(int argc, char** argv)
   {
     std::printf(
         "Usage: %s <bag_dir> <out.simplemap> [kf_dist_m=0.5] "
-        "[submap_radius_m=2.0] [detrend_z_window_m=2.5] "
-        "[odom_topic=/state_estimation] "
-        "[cloud_topic=/cloud_registered_body] [imu_topic=/utlidar/imu]\n"
-        "  detrend_z_window_m: smoothing window to remove slow Z-drift "
-        "(flat floor); 0 = off\n",
+        "[submap_radius_m=2.0] [odom_topic=/state_estimation] "
+        "[cloud_topic=/cloud_registered_body] [imu_topic=/utlidar/imu]\n",
         argv[0]);
     return 1;
   }
@@ -52,10 +60,9 @@ int main(int argc, char** argv)
   const std::string outFile = argv[2];
   const double kfDist = (argc > 3) ? std::stod(argv[3]) : 0.5;
   const double submapRadius = (argc > 4) ? std::stod(argv[4]) : 2.0;
-  const double detrendZWin = (argc > 5) ? std::stod(argv[5]) : 2.5;
-  const std::string odomTopic = (argc > 6) ? argv[6] : "/state_estimation";
-  const std::string cloudTopic = (argc > 7) ? argv[7] : "/cloud_registered_body";
-  const std::string imuTopic = (argc > 8) ? argv[8] : "/utlidar/imu";
+  const std::string odomTopic = (argc > 5) ? argv[5] : "/state_estimation";
+  const std::string cloudTopic = (argc > 6) ? argv[6] : "/cloud_registered_body";
+  const std::string imuTopic = (argc > 7) ? argv[7] : "/utlidar/imu";
   const int POSE_SUBSAMPLE = 5;  // keep every 5th odom msg (>1kHz -> plenty)
 
   rosbag2_storage::StorageOptions so;
@@ -183,39 +190,10 @@ int main(int argc, char** argv)
     pathLen[i] = pathLen[i - 1] + std::sqrt(dx * dx + dy * dy + dz * dz);
   }
 
-
-
-
-  if (detrendZWin > 0.0 && clouds.size() > 2)
-  {
-    std::vector<double> movavgZ(clouds.size(), 0.0);
-    for (size_t i = 0; i < clouds.size(); ++i)
-    {
-      const double s = pathLen[i];
-      const size_t lo = static_cast<size_t>(
-          std::lower_bound(pathLen.begin(), pathLen.end(), s - detrendZWin) -
-          pathLen.begin());
-      const size_t hi = static_cast<size_t>(
-          std::upper_bound(pathLen.begin(), pathLen.end(), s + detrendZWin) -
-          pathLen.begin());
-      double sum = 0.0;
-      for (size_t j = lo; j < hi; ++j) sum += cloudPose[j].z();
-      movavgZ[i] = sum / static_cast<double>(hi - lo);
-    }
-    const double zRef = movavgZ.front();
-    for (size_t i = 0; i < clouds.size(); ++i)
-    {
-      const double dz = zRef - movavgZ[i];
-      cloudPose[i] = mrpt::poses::CPose3D(0, 0, dz, 0, 0, 0) + cloudPose[i];
-    }
-    std::printf(
-        "Z-detrend applied (window=%.2f m): removed drift %.2f m .. %.2f m\n",
-        detrendZWin, zRef - movavgZ.front(),
-        zRef - *std::max_element(movavgZ.begin(), movavgZ.end()));
-  }
-
-
-  
+  // Anchors every kfDist of path length; each keyframe accumulates ALL scans
+  // within +/- submapRadius of path length around the anchor (a local submap
+  // from the SAME pass -> consistent poses). Dense, well-structured, overlapping
+  // clouds -> far more robust loop-closure ICP than thin single-scan keyframes.
   mrpt::maps::CSimpleMap sm;
   size_t kf = 0;
 

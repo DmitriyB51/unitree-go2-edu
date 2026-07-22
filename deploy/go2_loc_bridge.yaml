@@ -1,0 +1,82 @@
+# Domain bridge for LIVE localization over WiFi.
+#
+# THE PROBLEM THIS SOLVES
+#   The Unitree lidar app is bare-DDS and only delivers data when CycloneDDS is
+#   bound to a SINGLE WIRED interface. So Point-LIO and the matcher must live on
+#   the wired network (domain 0). But we want RViz on the laptop over WiFi.
+#
+#   So: domain 0 = wired (on the dog), domain 1 = WiFi (laptop).
+#   This bridge copies a small set of topics between the two.
+#
+# WHAT CROSSES THE WIFI
+#   Only light topics. The heavy /registered_scan PointCloud2 (15 Hz) stays on
+#   the robot -- that is the whole point of running the matcher ON the dog.
+#   The one exception is /localization/map, which is ~105k points but is sent
+#   ONCE because it is latched (transient_local), so it costs nothing ongoing.
+
+name: go2_loc_bridge
+
+topics:
+
+  # ---------- dog -> laptop (domain 0 -> 1) : things RViz displays ----------
+
+  # The localized robot pose (red arrow + blue trail in RViz).
+  /localization/pose:
+    type: nav_msgs/msg/Odometry
+    from_domain: 0
+    to_domain: 1
+
+  # Match quality. Watch this number: ~0.006-0.02 = healthy lock.
+  /localization/fitness:
+    type: std_msgs/msg/Float32
+    from_domain: 0
+    to_domain: 1
+
+  # The prior map (grey background cloud). Latched, so it must be republished
+  # latched on the far side too -- otherwise RViz connecting late sees nothing.
+  /localization/map:
+    type: sensor_msgs/msg/PointCloud2
+    from_domain: 0
+    to_domain: 1
+    qos:
+      durability: transient_local
+      reliability: reliable
+      history: keep_last
+      depth: 1
+
+  # Transforms: map -> camera_init (the matcher's correction) and
+  # camera_init -> aft_mapped (Point-LIO odometry). RViz needs both to place
+  # anything in the map frame.
+  /tf:
+    type: tf2_msgs/msg/TFMessage
+    from_domain: 0
+    to_domain: 1
+
+  /tf_static:
+    type: tf2_msgs/msg/TFMessage
+    from_domain: 0
+    to_domain: 1
+    qos:
+      durability: transient_local
+      reliability: reliable
+      history: keep_last
+      depth: 100
+
+
+  # The live scan after alignment (yellow cloud in RViz). Only ~41 KB/s because
+  # it is the voxel-downsampled 1 s window, not the raw lidar -- cheap enough
+  # for WiFi and it is our main VISUAL confirmation that the scan sits on the map.
+  /localization/aligned_cloud:
+    type: sensor_msgs/msg/PointCloud2
+    from_domain: 0
+    to_domain: 1
+
+  # ---------- laptop -> dog (domain 1 -> 0) : control ----------
+
+  # RViz "2D Pose Estimate" button. WITHOUT this reverse bridge you cannot
+  # correct the robot's initial pose from the laptop, which is the single most
+  # important manual control we have during a live run.
+  /initialpose:
+    type: geometry_msgs/msg/PoseWithCovarianceStamped
+    from_domain: 1
+    to_domain: 0
