@@ -56,7 +56,34 @@ def make_static_tf(context, *args, **kwargs):
             "--child-frame-id", "base_link",   # потомок (корпус робота на полу)
         ],
     )
-    return [static_tf]
+    # ►► ВТОРОЕ звено: aft_mapped -> body (тождественное, без сдвига и поворота).
+    #
+    # ЗАЧЕМ. Point-LIO пользуется ДВУМЯ именами для ОДНОГО и того же кадра сенсора:
+    #   * в TF он вещает   camera_init -> "aft_mapped"   (laserMapping.cpp:810)
+    #   * а облако /cloud_registered_body штампует как "body" (laserMapping.cpp:744)
+    # Кадра "body" в дереве TF при этом НЕТ ни у кого. Поэтому obstacle_layer локальной
+    # costmap не может перевести облако в свой кадр и молча выбрасывает КАЖДОЕ сообщение:
+    #   "Message Filter dropping message: frame 'body' ...
+    #    the timestamp on the message is earlier than all the data in the transform cache"
+    # Формулировка сбивает с толку — выглядит как проблема времени, а на деле кэш
+    # преобразований для "body" просто ПУСТ (кадра не существует).
+    # Итог: локальная costmap всегда пустая -> препятствия не видны.
+    #
+    # Сдвига здесь нет: это буквально один и тот же физический кадр, просто два имени.
+    body_alias_tf = Node(
+        package="tf2_ros",
+        executable="static_transform_publisher",
+        name="aft_mapped_to_body",
+        output="screen",
+        arguments=[
+            "--x", "0", "--y", "0", "--z", "0",
+            "--yaw", "0", "--pitch", "0", "--roll", "0",
+            "--frame-id", "aft_mapped",   # родитель (имя кадра в TF)
+            "--child-frame-id", "body",   # потомок (имя кадра в облаках Point-LIO)
+        ],
+    )
+
+    return [static_tf, body_alias_tf]
 
 
 def generate_launch_description():

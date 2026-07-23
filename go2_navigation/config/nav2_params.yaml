@@ -52,8 +52,18 @@ planner_server:
 controller_server:
   ros__parameters:
     controller_frequency: 20.0
+    # ►► progress_checker — сторож "робот вообще движется?". Если за
+    #    movement_time_allowance секунд робот не сдвинулся на required_movement_radius,
+    #    контроллер объявляет "застрял". ⚠️ ОФЛАЙН это сработает ВСЕГДА (робот в bag не
+    #    слушает наш /cmd_vel) — это ожидаемо, мы смотрим на команды, а не на слежение.
+    progress_checker_plugin: "progress_checker"
+    progress_checker:
+      plugin: "nav2_controller::SimpleProgressChecker"
+      required_movement_radius: 0.5
+      movement_time_allowance: 10.0
     # Пороги "цель достигнута".
     general_goal_checker:
+      stateful: True
       plugin: "nav2_controller::SimpleGoalChecker"
       xy_goal_tolerance: 0.25       # доехали, если в 25 см от цели
       yaw_goal_tolerance: 0.26      # и развернулись в пределах ~15°
@@ -61,15 +71,46 @@ controller_server:
     controller_plugins: ["FollowPath"]
     FollowPath:
       plugin: "nav2_regulated_pure_pursuit_controller::RegulatedPurePursuitController"
-      desired_linear_vel: 0.5       # ►► крейсерская скорость 0.5 м/с (безопасно для начала)
+      # ►► 0.3 м/с — ПРОВЕРЕНО НА ЖИВОЙ СОБАКЕ 2026-07-23. Это НЕ произвольное число:
+      #    на 0.15 м/с робот идёт странно и неустойчиво, на 0.3 — нормально
+      #    (у Unitree в их же примере go2_sport_client тоже стоит 0.3).
+      #    Ниже 0.3 не опускать. Понижение "ради безопасности" здесь ВРЕДИТ:
+      #    Nav2 будет исправно слать команды, а собака — плохо их исполнять.
+      desired_linear_vel: 0.3
+      # ►► Нижняя граница "регулятора" скорости (см. use_regulated_linear_velocity_scaling ниже).
+      #    RPP сам сбрасывает скорость на поворотах и у препятствий — без этой границы
+      #    он на каждом повороте нырял бы в те самые "плохие" 0.1-0.2 м/с.
+      regulated_linear_scaling_min_speed: 0.3
       lookahead_dist: 0.6           # на сколько метров вперёд по пути "целиться"
       min_lookahead_dist: 0.3
       max_lookahead_dist: 0.9
-      # ►► Разрешаем разворот на месте перед стартом — четвероногий это умеет,
-      #    и так он не выписывает широкую дугу в узком коридоре.
+      # ►► Разворот на месте перед стартом (в узком коридоре не выписывает дугу).
+      #    ⚠️ RPP при этом жёстко ставит linear_vel = 0.0 — параметра «немного вперёд»
+      #    у него НЕТ. А у нашей собаки при чистом vx=0 + angular.z ЛАПЫ ЗАСТРЕВАЮТ.
+      #    Поэтому небольшой «вперёд» на время поворота добавляет НАШ мост
+      #    (ROTATE_ASSIST_VX в vel_ctrl_repub.cpp) — это особенность конкретного
+      #    робота, ей место в мосте, а не в конфиге Nav2.
       use_rotate_to_heading: true
-      rotate_to_heading_angular_vel: 0.8
-      max_angular_accel: 3.0
+      rotate_to_heading_angular_vel: 0.4   # скорость доворота на месте
+      # ⭐⭐ НЕ СНИЖАТЬ. Это НЕ «плавность», это порог, ниже которого робот НЕ ПОВЕРНЁТСЯ.
+      #
+      # RPP при развороте на месте (rotateToHeading) ограничивает команду ускорением
+      # относительно ИЗМЕРЕННОЙ с одометрии угловой скорости:
+      #     angular_vel = clamp(±rotate_to_heading_angular_vel,
+      #                         curr_speed.angular.z ± max_angular_accel * dt)
+      # где dt = 1 / controller_frequency = 1/20 = 0.05 с.
+      #
+      # ЛОВУШКА (поймана на живой собаке 2026-07-23): собака стоит, curr_speed = 0,
+      # значит ПЕРВАЯ команда = max_angular_accel * 0.05. При 1.5 это 0.075 рад/с
+      # (4°/с) — робот от такой команды НЕ ШЕВЕЛИТСЯ, одометрия остаётся 0, и
+      # команда навсегда залипает на 0.075. Замкнутый круг: цель просто не
+      # отрабатывается, при этом /cmd_vel выглядит «живым». В логе это было
+      # ровно `angular.z: -0.075`, постоянно, до самого таймаута.
+      #
+      # Поэтому ускорение должно за ОДИН цикл выводить на рабочую скорость:
+      #     max_angular_accel >= rotate_to_heading_angular_vel / dt = 0.4 / 0.05 = 8.0
+      # Тот же класс ошибки, что и попытка занизить desired_linear_vel до 0.15.
+      max_angular_accel: 8.0
       # Сброс скорости у препятствий и на поворотах (то самое "regulated").
       use_regulated_linear_velocity_scaling: true
       use_cost_regulated_linear_velocity_scaling: false
@@ -116,7 +157,21 @@ local_costmap:
     ros__parameters:
       update_frequency: 5.0
       publish_frequency: 5.0
-      global_frame: camera_init       # ►► локальная карта живёт в кадре одометрии (гладкий, без скачков)
+      # ►► БЫЛО camera_init («кадр одометрии, гладкий, без скачков» — обычная практика Nav2).
+      # ЗДЕСЬ ЭТО НЕ РАБОТАЕТ. Измерено на роботе 2026-07-23:
+      #   пол в camera_init наклонён на 21°, толщина подгонки плоскости 0.141 м (каша);
+      #   пол в map        наклонён на 7.6°, толщина 0.034 м (чёткая плоскость).
+      # Причина — корневая и уже известная: Point-LIO работает ТОЛЬКО по гироскопу
+      # (transform_everything.py обнуляет акселерометр L1), значит гравитацию он не
+      # наблюдает и camera_init наследует наклон крепления лидара в момент запуска.
+      # Фильтр min/max_obstacle_height применяется ПОСЛЕ перевода облака в global_frame,
+      # поэтому в наклонённом кадре пол «уезжает» по z на метры и режется как препятствие:
+      # локальная costmap заполнялась сплошным веером фантомных стен.
+      # Матчер (map->camera_init) убирает ~20° наклона, поэтому берём map.
+      # ЦЕНА: локальная costmap теперь наследует скачки коррекции матчера. При fitness
+      # 0.005-0.02 они мелкие; если станут заметны — вернуть camera_init нельзя, надо
+      # чинить выравнивание карты по гравитации (см. комментарий к min_obstacle_height).
+      global_frame: map
       robot_base_frame: base_link
       rolling_window: true            # окно едет вместе с роботом
       width: 6                        # 6×6 м окна вокруг робота
@@ -125,25 +180,51 @@ local_costmap:
       footprint: "[ [0.35, 0.15], [0.35, -0.15], [-0.35, -0.15], [-0.35, 0.15] ]"
       plugins: ["obstacle_layer", "inflation_layer"]
       # obstacle_layer — препятствия из живого лидара.
-      # ►► Берём 3D-облако /registered_scan НАПРЯМУЮ (data_type PointCloud2) — так не нужен
-      #    отдельный пакет pointcloud_to_laserscan. Облако уже в кадре camera_init.
-      #    Фильтр по высоте (min/max_obstacle_height) отсекает пол и потолок: оставляем
-      #    только то, что на уровне корпуса робота. Высота здесь — z в кадре camera_init
-      #    (пол ≈ -0.35 м), поэтому берём от -0.1 (чуть выше пола) до 1.5 м.
-      #    Если на Jetson это окажется тяжело — поставить ros-humble-pointcloud-to-laserscan
-      #    и сплющить облако в лёгкий 2D /scan (LaserScan). Тогда вернуть предыдущий вариант.
+      # ⚠️ БЫЛО /registered_scan и это НЕ работало. Почему (нашли на офлайн-тесте Этапа 4):
+      #    /registered_scan — накопленное облако в МИРОВОМ кадре camera_init. obstacle_layer
+      #    берёт «начало сенсора» = origin кадра облака = (0,0) НЕПОДВИЖНО. Раз сенсор всегда
+      #    в (0,0), а робот уехал, costmap НЕ может raytrace-очистить свободное место
+      #    ("Sensor origin out of map bounds") → всё облако висит препятствиями на пути →
+      #    RPP кричит "collision ahead!" и прерывается. Классическая ошибка: obstacle_layer
+      #    ждёт скан ИЗ ТОЧКИ сенсора, а не мировое облако.
+      # ✅ СТАЛО /cloud_registered_body — облако Point-LIO в кадре ТЕЛА (движется с роботом).
+      #    Тогда origin сенсора = позиция тела = где робот реально стоит → raytrace-очистка
+      #    работает, фантомных препятствий нет. Кадр берётся из header.frame_id самого
+      #    сообщения (в TF-дереве он под camera_init), costmap сам транслирует точки.
+      # ⚠️ НЕ ПРОВЕРЕНО ОФЛАЙН: в заезде loc_test_2_1_plio этого топика НЕТ (только
+      #    /registered_scan). ПРОВЕРИТЬ НА РОБОТЕ:
+      #      ros2 topic echo /cloud_registered_body --field header.frame_id   # какой кадр?
+      #    и подстроить min/max_obstacle_height под ЭТОТ кадр (ниже — прикидка для тела,
+      #    где пол ≈ -0.40 м под сенсором). Если топика нет — включить его в Point-LIO
+      #    или поставить pointcloud_to_laserscan на /cloud_registered_body.
       obstacle_layer:
         plugin: "nav2_costmap_2d::ObstacleLayer"
         observation_sources: pointcloud
         pointcloud:
-          topic: /registered_scan
+          topic: /cloud_registered_body   # ►► сенсорный кадр (тело), НЕ мировой /registered_scan
           data_type: "PointCloud2"
           marking: true               # ставить препятствия
-          clearing: true              # и убирать, когда путь освободился
-          min_obstacle_height: -0.1   # чуть выше пола (пол ≈ -0.35 м в camera_init)
-          max_obstacle_height: 1.5    # ниже потолка
-          obstacle_max_range: 5.0
-          raytrace_max_range: 6.0
+          clearing: true              # и убирать, когда путь освободился (теперь работает!)
+          # ВЫСОТЫ ЗАДАЮТСЯ В КАДРЕ global_frame (= map), а НЕ в кадре облака!
+          # Nav2 сначала переводит облако в global_frame, и только потом режет по z.
+          # Измерено на роботе (map): пол -0.566 м на 1 м -> -0.720 м на 5 м
+          # (остаточный наклон 7.6°), base_link на -0.58 м.
+          # -0.45 гарантированно ВЫШЕ пола на всём диапазоне -> пол не метится,
+          # а препятствия выше ~0.12 м над полом ловятся.
+          # ⚠️ Замер сделан в текущем поле зрения. Остаточные 7.6° означают, что при
+          #    повороте пол может ПОДНЯТЬСЯ выше порога. Настоящее лечение — выровнять
+          #    прайор-карту по гравитации, а не подбирать это число.
+          min_obstacle_height: -0.45
+          max_obstacle_height: 1.5    # ниже потолка (реально выше +0.4 м L1 почти ничего не видит)
+          # ⚠️ САМОЗАСВЕТ: в пределах 1 м лидар видит СОБСТВЕННЫЕ лапы робота
+          # (все точки там от -0.57 до -0.155 м). Без нижней отсечки робот считает
+          # себя препятствием. 0.8 м — то же число, что --body-radius в bag_to_grid.py,
+          # где эта же проблема решалась при построении 2D-карты.
+          obstacle_min_range: 0.8
+          raytrace_min_range: 0.8
+          # Дальность урезана: чем дальше точка, тем сильнее врут остаточные 7.6° наклона.
+          obstacle_max_range: 3.0
+          raytrace_max_range: 3.5
       inflation_layer:
         plugin: "nav2_costmap_2d::InflationLayer"
         inflation_radius: 0.80        # держим заодно с global_costmap (см. пояснение там)
@@ -165,7 +246,7 @@ behavior_server:
   ros__parameters:
     local_costmap_topic: local_costmap/costmap_raw
     global_costmap_topic: global_costmap/costmap_raw
-    local_frame: camera_init
+    local_frame: map        # ►► согласовано с local_costmap.global_frame (см. пояснение там)
     global_frame: map
     robot_base_frame: base_link
     behavior_plugins: ["spin", "backup", "wait"]
@@ -182,9 +263,11 @@ behavior_server:
 # ============================================================================
 velocity_smoother:
   ros__parameters:
-    max_velocity: [0.5, 0.0, 0.8]     # [vx, vy, vyaw]. vy=0: боком пока не ходим (упростили)
-    min_velocity: [-0.5, 0.0, -0.8]
-    max_accel: [1.0, 0.0, 2.0]
+    # ►► ЖЁСТКИЙ потолок скорости (финальный предохранитель) — держим заодно с desired_linear_vel.
+    max_velocity: [0.3, 0.0, 0.4]     # [vx, vy, vyaw]. vy=0: боком пока не ходим (упростили)
+    min_velocity: [-0.3, 0.0, -0.4]
+    # Разгон плавный (мягкий старт), торможение резкое (быстро встать = безопасно).
+    max_accel: [0.5, 0.0, 1.0]
     max_decel: [-1.5, 0.0, -2.0]
 
 # ============================================================================

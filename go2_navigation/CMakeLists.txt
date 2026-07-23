@@ -20,6 +20,7 @@ install(DIRECTORY
 install(PROGRAMS
   scripts/bag_to_grid.py
   scripts/goal_to_planner.py
+  scripts/goal_to_controller.py
   DESTINATION lib/${PROJECT_NAME}
 )
 
